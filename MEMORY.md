@@ -108,3 +108,35 @@ just add new dated entries below.
   create product (admin) → view empty cart → add item → add same item again (quantity bumps
   4, not a duplicate row) → update quantity directly (10) → remove item (cart empties).
   **Segment 2 (Cart) is complete.**
+- **2026-09-23 — Segment 3 (Checkout & Orders) started.** `Order`/`OrderItem` entities +
+  `V4__create_orders_table.sql` written. Key design choice: `OrderItem` is a full snapshot
+  (`productName`/`unitPrice` copied in at checkout, not a live link to `Product`) — unlike
+  `CartItem`, which reads current product data. `order_items.product_id` is `ON DELETE
+  SET NULL` (order history survives product deletion), unlike `cart_items.product_id`'s
+  `ON DELETE RESTRICT`. `OrderStatus` is a small enum (`PENDING`/`PAID`/`FAILED`/`CANCELLED`),
+  not a full state machine — that's explicitly Phase 3 scope per `PLAN.md`. `Order.userId`
+  has no `UNIQUE` constraint (a user has many orders, unlike one cart per user).
+- **2026-09-23 — `OrderRepository`, `BadRequestException` (+ `GlobalExceptionHandler` wiring),
+  Order DTOs (`OrderItemResponse`, `OrderResponse`), `CheckoutService`, and
+  `CheckoutServiceTest` written.** Two decisions confirmed with the user first: checkout
+  **validates** stock (throws `BadRequestException` if requested qty > available) but does
+  **not decrement** it — that happens on payment success in Segment 4, so an abandoned
+  unpaid order doesn't hold inventory hostage. Checkout **clears the cart** on success.
+  `CheckoutServiceTest` — **6/6 tests passing.**
+- **2026-09-23 — `OrderService` (+ `OrderSummaryResponse` DTO) and `OrderServiceTest` written.**
+  Kept separate from `CheckoutService` (single responsibility: one writes orders, the other
+  reads them). `list()` returns lightweight `OrderSummaryResponse` (no item breakdown) instead
+  of the full `OrderResponse` — avoids an N+1 lazy-load per order when listing a user's whole
+  order history; `get(id)` still returns full item detail via the fetch-joined repository query.
+  `OrderServiceTest` — **3/3 tests passing.**
+- **2026-09-23 — `OrderController` written** (`POST /api/orders/checkout`, `GET /api/orders`,
+  `GET /api/orders/{id}`). Delegates to `CheckoutService` (write) and `OrderService` (read)
+  behind one controller. This completes Segment 3's core vertical slice; manual/integration
+  test still pending, same as Product and Cart before it.
+- **2026-09-23 — Integration test for Checkout/Orders skipped for now**, same call as
+  Product and Cart — deliberate, tracked, not forgotten.
+- **2026-09-23 — Checkout/Orders manually tested end-to-end via Postman, all passing.**
+  Flow verified: checkout on empty cart → 400; add 2 (stock 3), bump to 5, checkout → 400
+  insufficient stock; fix quantity to 2, checkout → 201 with full order; cart confirmed
+  empty afterward; list orders shows summary; get by id shows full item detail.
+  **Segment 3 (Checkout & Orders) is complete.**
