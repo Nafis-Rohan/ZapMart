@@ -39,9 +39,10 @@ checklist items below, but expect a reminder after each relevant piece of code.
 - [ ] *(Deferred sub-task, do later)* Redis-backed guest cart path
 
 ## Segment 3 — Checkout & Orders
-- [ ] `Order` + `OrderItem` entities + migration
-- [ ] Checkout service — snapshot cart → order, compute totals
-- [ ] Order controller (create checkout, view order)
+- [x] `Order` + `OrderItem` entities + migration (`V4__create_orders_table.sql`) — written and verified (Flyway applied cleanly, schema at version 4)
+- [x] Checkout service — snapshot cart → order, compute totals — compiles; unit test written and passing (6/6 tests)
+- [x] `OrderService` (list/get, separate from `CheckoutService`'s write path) — unit tested, 3/3 passing
+- [x] Order controller (`POST /api/orders/checkout`, `GET /api/orders`, `GET /api/orders/{id}`) — manually tested end-to-end via Postman (empty-cart rejection, insufficient-stock rejection, successful checkout, cart cleared, list + get order), all working. Integration test deliberately skipped, per `MEMORY.md`.
 
 ## Segment 4 — Stripe Payment (no idempotency yet)
 - [ ] `Payment` entity + migration
