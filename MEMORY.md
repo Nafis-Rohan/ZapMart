@@ -48,6 +48,20 @@ just add new dated entries below.
   **Standing fact: local Postgres for this project always runs on port 5433, not 5432.**
   Remember this for any future `.env` file, README setup instructions, or CI config.
 
+- **2026-09-22 — Maven couldn't resolve `spring-boot-starter-parent` (IntelliJ: "Parent ...
+  has problems"); IntelliJ also flagged the global `settings.xml` as having a syntax error.**
+  Root cause: `C:\Users\nafis\.m2\settings.xml` (global, used by every Maven project on this
+  machine — not part of this repo) held a publish credential for a different project, under
+  `<server><id>central</id>`. That id collides with Maven's own built-in "central" repository
+  (the one it downloads dependencies from), so Maven tried authenticating downloads with
+  those publish credentials and failed. It was also missing the standard settings.xml XML
+  namespace, which is what triggered IntelliJ's separate "syntax error" flag.
+  **Fix (temporary, by choice): renamed it to `settings.xml.bak`**, so Maven ignores it
+  entirely — meaning ZapMart (and any other project) now resolves dependencies with no
+  custom global settings. **Standing fact: to publish that other project again, rename
+  `settings.xml.bak` back to `settings.xml` first, then rename it away again afterward** —
+  don't leave it active as `settings.xml` while working on ZapMart.
+
 ## Changes Log
 - **2026-09-22 — Base package is `com.nafis.ZapMart`**, not `com.app` as originally written
   in `ARCHITECTURE.md`. Doc updated to match the code.
@@ -58,3 +72,39 @@ just add new dated entries below.
 - **2026-09-22 — Admin check** lives in `AdminGuard` (`common/security`), called from the
   controller with the `X-User-Id` header, not inside the service.
 - **2026-09-22 — `Product.price`** now declares `precision = 10, scale = 2` to match the `NUMERIC(10,2)` migration.
+- **2026-09-22 — App now runs on port 9090, not 8080.** Cause: Windows/Docker Desktop's
+  WSL2 networking periodically reserves ("excludes") port ranges for its own use — 8080
+  fell inside one (`8020–8119`), so Tomcat couldn't bind even though nothing was actually
+  running on it. Moved `server.port` to `9090` in `application.yml` to sidestep it
+  permanently, rather than fighting the OS reservation each time it recurs.
+- **2026-09-22 — Segment 2 (Cart) started.** `Cart`/`CartItem` entities + `V3__create_carts_table.sql`
+  migration written and verified (Flyway applied cleanly, schema at version 3). `carts.user_id`
+  is `UNIQUE` (one cart per user); `cart_items` has `UNIQUE(cart_id, product_id)` (no duplicate
+  product rows — quantity updates instead, enforced in the service layer later); `product_id`
+  is `ON DELETE RESTRICT` (can't delete a product that's in a cart).
+- **2026-09-22 — SHORTCUT: `CartService.addItem` does not validate against `Product.stockQuantity`.**
+  A user can add more of a product than is actually in stock; nothing in `TASK.md`'s Segment 2
+  scope calls for stock enforcement at the cart level. Deliberately deferred to checkout/payment
+  (Segments 3–4), where stock actually needs to be locked/decremented. Revisit if we want
+  earlier "not enough stock" feedback in the cart itself.
+- **2026-09-22 — `CartService.getCart` does not persist an empty cart.** A user with no items
+  yet gets an in-memory empty `CartResponse` (`id: null`); a `Cart` row is only created in the
+  DB the first time `addItem` is called. Avoids junk empty-cart rows for users who never add
+  anything.
+- **2026-09-22 — `CartRepository`, Cart DTOs (`CartItemRequest`, `CartItemQuantityRequest`,
+  `CartItemResponse`, `CartResponse`), `CartService`, and `CartServiceTest` written.**
+  `CartServiceTest` — **10/10 tests passing.**
+- **2026-09-22 — `CartController` written** (`GET /api/cart`, `POST /api/cart/items`,
+  `PUT /api/cart/items/{productId}`, `DELETE /api/cart/items/{productId}`). No `AdminGuard` —
+  cart endpoints are "my own cart," identity via `X-User-Id` only, same as read paths elsewhere.
+  `PUT`/`DELETE` return the updated `CartResponse` (200) instead of `204 No Content`, so the
+  client gets the fresh cart state without a second `GET`. This completes Segment 2's core
+  vertical slice (entities → repository → service → controller); manual/integration test
+  still pending, same as Product in Segment 1.
+- **2026-09-22 — Integration test for Cart skipped for now**, same call as Product in
+  Segment 1 — deliberate, not forgotten. Revisit as a batch later (per `RULES.md` §1a,
+  this is a tracked shortcut, not silently dropped scope).
+- **2026-09-22 — Cart manually tested end-to-end via Postman, all passing.** Flow verified:
+  create product (admin) → view empty cart → add item → add same item again (quantity bumps
+  4, not a duplicate row) → update quantity directly (10) → remove item (cart empties).
+  **Segment 2 (Cart) is complete.**

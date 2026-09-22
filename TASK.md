@@ -31,9 +31,11 @@ checklist items below, but expect a reminder after each relevant piece of code.
 - [x] Product controller (list/search/get/create/update/delete) — compiles; manual + integration test pending
 
 ## Segment 2 — Cart
-- [ ] `Cart` + `CartItem` entities + migration (Postgres-backed, per earlier decision)
-- [ ] Cart service (add/remove/view item, quantity update)
-- [ ] Cart controller
+- [x] `Cart` + `CartItem` entities + Flyway migration (`V3__create_carts_table.sql`) — written and verified (Flyway applied, schema at version 3)
+- [x] Cart repository (`CartRepository` — `findByUserId` + fetch-joined `findByUserIdWithItems` to avoid N+1)
+- [x] Cart DTOs (`CartItemRequest`, `CartItemQuantityRequest`, `CartItemResponse`, `CartResponse`)
+- [x] Cart service (add/remove/view item, quantity update) — compiles; unit test written and passing (10/10 tests)
+- [x] Cart controller (`GET /api/cart`, `POST /api/cart/items`, `PUT /api/cart/items/{productId}`, `DELETE /api/cart/items/{productId}`) — manually tested end-to-end via Postman (create → view → add → bump quantity → update quantity → remove), all working. Integration test still deliberately skipped, per `MEMORY.md`.
 - [ ] *(Deferred sub-task, do later)* Redis-backed guest cart path
 
 ## Segment 3 — Checkout & Orders
