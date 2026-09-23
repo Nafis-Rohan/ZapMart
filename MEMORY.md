@@ -140,3 +140,44 @@ just add new dated entries below.
   insufficient stock; fix quantity to 2, checkout → 201 with full order; cart confirmed
   empty afterward; list orders shows summary; get by id shows full item detail.
   **Segment 3 (Checkout & Orders) is complete.**
+- **2026-09-23 — Segment 4 (Stripe Payment) started.** `Payment` entity + `PaymentStatus`
+  enum (`PENDING`/`SUCCEEDED`/`FAILED` only — Stripe's PaymentIntent already tracks the
+  finer-grained states like `requires_action`/`processing` on its side; no need to duplicate
+  that locally yet, revisit if Phase 3's order lifecycle work needs more granularity) +
+  `V5__create_payments_table.sql` written and verified (app started, Flyway applied
+  cleanly, schema at version 5). Key design choices confirmed with the user first:
+  **one payment per order** (`payments.order_id` is `UNIQUE`) — no retry-attempts model,
+  consistent with "no idempotency yet" scope for Phase 1; Phase 2's `idempotency_keys`
+  table (separate, tracks the *request*, not the payment) owns retry/dedupe semantics.
+  `payments.user_id` stored directly on the entity (not just reachable via order), per
+  `RULES.md` §4 — every user-scoped table gets `user_id` from day one. `order_id` is
+  `ON DELETE RESTRICT` (payments are financial records, never cascade-delete them).
+- **2026-09-23 — Stripe SDK wired in.** Added `com.stripe:stripe-java:29.2.0` to `pom.xml`
+  (latest stable, checked against Maven Central). `stripe.secret-key` / `stripe.webhook-secret`
+  added to `application.yml`, both pulled from env vars (`STRIPE_SECRET_KEY`,
+  `STRIPE_WEBHOOK_SECRET`) — never hardcoded. `StripeClientConfig` (`payment/stripe/`)
+  sets `Stripe.apiKey` once on startup via `@PostConstruct`, so no other class touches the
+  raw key. User set `STRIPE_SECRET_KEY` via IntelliJ run-config env vars, using a Stripe
+  **sandbox/test-mode** key from their "Aventiq Tecnology sandbox" account (via `stripe-cli`,
+  installed with `npm install -g @stripe/cli`, authorized with `stripe login`).
+  `STRIPE_WEBHOOK_SECRET` left blank for now — to be filled in once the webhook controller
+  exists, via `stripe listen --forward-to localhost:9090/api/payments/webhook`.
+- **2026-09-23 — `PaymentRepository`, `PaymentRequest`/`PaymentResponse` DTOs, and
+  `PaymentService` written.** `PaymentService.pay(userId, orderId, request)`: validates the
+  order belongs to the caller and is still `PENDING`, blocks a second payment attempt on the
+  same order (service-level check ahead of the DB unique constraint, so it fails with a clean
+  `400` instead of a raw SQL error), creates **and synchronously confirms** a Stripe
+  PaymentIntent using a client-supplied `paymentMethodId` (Stripe's test tokens, e.g.
+  `pm_card_visa` / `pm_card_visa_chargeDeclined` — no frontend/Stripe.js yet, that's Phase 5).
+  On success: `Payment` saved `SUCCEEDED`, order → `PAID`, stock decremented per order item
+  (stock decrement deliberately happens here, not at checkout, per Segment 3's design). On
+  decline: `Payment` saved `FAILED`, order → `FAILED`, stock untouched.
+  **SHORTCUT (flagged, not silent): a failed payment permanently blocks that order from ever
+  being paid** — since `payments.order_id` is `UNIQUE`, there's no retry path once one
+  `Payment` row exists for an order. Acceptable for Phase 1 (manual test is the happy path
+  only); revisit if failed-payment retry is needed before Phase 2's idempotency layer lands.
+  Stripe's `PaymentIntentCreateParams.Builder` uses repeated-field builders (`addPaymentMethodType(String)`),
+  not a `List` setter — caught via compile error, fixed.
+  `PaymentServiceTest` written (static-mocks `PaymentIntent.create` via Mockito's
+  `mockStatic`, no `mockito-inline` needed — inline mock maker is Mockito 5's default) —
+  **5/5 tests passing.**
