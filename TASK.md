@@ -45,9 +45,9 @@ checklist items below, but expect a reminder after each relevant piece of code.
 - [x] Order controller (`POST /api/orders/checkout`, `GET /api/orders`, `GET /api/orders/{id}`) — manually tested end-to-end via Postman (empty-cart rejection, insufficient-stock rejection, successful checkout, cart cleared, list + get order), all working. Integration test deliberately skipped, per `MEMORY.md`.
 
 ## Segment 4 — Stripe Payment (no idempotency yet)
-- [ ] `Payment` entity + migration
-- [ ] Stripe client config (API key, webhook secret via env)
-- [ ] Payment service — create PaymentIntent, confirm, handle basic success/failure
+- [x] `Payment` entity + migration
+- [x] Stripe client config (API key, webhook secret via env)
+- [x] Payment service — create PaymentIntent, confirm, handle basic success/failure
 - [ ] Payment controller + Stripe webhook endpoint
 - [ ] Manual test: single successful end-to-end charge
 
