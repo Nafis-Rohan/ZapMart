@@ -12,9 +12,11 @@ import com.nafis.ZapMart.product.Product;
 import com.nafis.ZapMart.product.ProductRepository;
 import com.stripe.exception.CardException;
 import com.stripe.model.PaymentIntent;
+import com.stripe.net.RequestOptions;
 import com.stripe.param.PaymentIntentCreateParams;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -33,6 +35,8 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class PaymentServiceTest {
+
+    private static final String STRIPE_KEY = "pay-1-client-key-1";
 
     @Mock
     private OrderRepository orderRepository;
@@ -80,7 +84,7 @@ class PaymentServiceTest {
         when(orderRepository.findByIdAndUserIdWithItems(10L, 1L)).thenReturn(Optional.empty());
 
         assertThrows(ResourceNotFoundException.class,
-                () -> paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa")));
+                () -> paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa"), STRIPE_KEY));
     }
 
     @Test
@@ -89,7 +93,7 @@ class PaymentServiceTest {
         when(orderRepository.findByIdAndUserIdWithItems(10L, 1L)).thenReturn(Optional.of(order));
 
         assertThrows(BadRequestException.class,
-                () -> paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa")));
+                () -> paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa"), STRIPE_KEY));
     }
 
     @Test
@@ -99,7 +103,7 @@ class PaymentServiceTest {
         when(paymentRepository.findByOrderId(10L)).thenReturn(Optional.of(new Payment()));
 
         assertThrows(BadRequestException.class,
-                () -> paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa")));
+                () -> paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa"), STRIPE_KEY));
     }
 
     @Test
@@ -118,9 +122,9 @@ class PaymentServiceTest {
         when(intent.getId()).thenReturn("pi_123");
 
         try (MockedStatic<PaymentIntent> mocked = mockStatic(PaymentIntent.class)) {
-            mocked.when(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class))).thenReturn(intent);
+            mocked.when(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class), any(RequestOptions.class))).thenReturn(intent);
 
-            PaymentResponse response = paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa"));
+            PaymentResponse response = paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa"), STRIPE_KEY);
 
             assertEquals(PaymentStatus.SUCCEEDED, response.status());
             assertEquals("pi_123", response.stripePaymentIntentId());
@@ -128,6 +132,29 @@ class PaymentServiceTest {
 
         assertEquals(OrderStatus.PAID, order.getStatus());
         assertEquals(98, product.getStockQuantity());
+    }
+
+    @Test
+    void pay_sendsTheIdempotencyKeyToStripe() {
+        Order order = order(10L, 1L, OrderStatus.PENDING, "5.00");
+        when(orderRepository.findByIdAndUserIdWithItems(10L, 1L)).thenReturn(Optional.of(order));
+        when(paymentRepository.findByOrderId(10L)).thenReturn(Optional.empty());
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        PaymentIntent intent = mock(PaymentIntent.class);
+        when(intent.getStatus()).thenReturn("requires_payment_method");
+        when(intent.getId()).thenReturn("pi_789");
+
+        try (MockedStatic<PaymentIntent> mocked = mockStatic(PaymentIntent.class)) {
+            mocked.when(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class), any(RequestOptions.class)))
+                    .thenReturn(intent);
+
+            paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa"), STRIPE_KEY);
+
+            ArgumentCaptor<RequestOptions> options = ArgumentCaptor.forClass(RequestOptions.class);
+            mocked.verify(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class), options.capture()));
+            assertEquals(STRIPE_KEY, options.getValue().getIdempotencyKey());
+        }
     }
 
     @Test
@@ -144,9 +171,9 @@ class PaymentServiceTest {
         when(intent.getId()).thenReturn("pi_456");
 
         try (MockedStatic<PaymentIntent> mocked = mockStatic(PaymentIntent.class)) {
-            mocked.when(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class))).thenReturn(intent);
+            mocked.when(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class), any(RequestOptions.class))).thenReturn(intent);
 
-            PaymentResponse response = paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa_chargeDeclined"));
+            PaymentResponse response = paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa_chargeDeclined"), STRIPE_KEY);
 
             assertEquals(PaymentStatus.FAILED, response.status());
         }
@@ -170,9 +197,9 @@ class PaymentServiceTest {
                 "Your card was declined.", "req_123", "card_declined", null, "generic_decline", null, 402, null);
 
         try (MockedStatic<PaymentIntent> mocked = mockStatic(PaymentIntent.class)) {
-            mocked.when(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class))).thenThrow(declined);
+            mocked.when(() -> PaymentIntent.create(any(PaymentIntentCreateParams.class), any(RequestOptions.class))).thenThrow(declined);
 
-            PaymentResponse response = paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa_chargeDeclined"));
+            PaymentResponse response = paymentService.pay(1L, 10L, new PaymentRequest("pm_card_visa_chargeDeclined"), STRIPE_KEY);
 
             assertEquals(PaymentStatus.FAILED, response.status());
         }
