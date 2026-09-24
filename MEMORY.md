@@ -181,3 +181,70 @@ just add new dated entries below.
   `PaymentServiceTest` written (static-mocks `PaymentIntent.create` via Mockito's
   `mockStatic`, no `mockito-inline` needed — inline mock maker is Mockito 5's default) —
   **5/5 tests passing.**
+- **2026-09-24 — Load-test plan decided (for Segment 8).**
+  - **Rate ladder:** run k6 at **1,500 → 2,000 → 3,000 req/min**, stepping up only if the
+    previous step is clean. Stretch goal: 4,000/min (~67 req/s) if the machine allows. The
+    resume number is whatever rate was actually run, never a higher one.
+  - **Fake Stripe** (stub behind a profile, ~200 ms delay) for load tests — real Stripe test
+    mode caps around 25 req/s and would return `429`s, spoiling the counts.
+  - **Three-stage comparison:** (1) no idempotency → measure duplicate orders, (2) Postgres-only
+    idempotency, (3) Postgres + Redis cache. Stage 2 must already be fully correct; Redis only
+    improves latency/DB load.
+  - **Duplicates must be truly concurrent** (k6 `http.batch`, same `Idempotency-Key`); proof is
+    counted in Postgres (`orders`/`payments` grouped by user), not from HTTP responses.
+  - **Duplicate-rate figure comes from our own measured run** (simulated retry share), not a
+    copied number. Resume wording: Postgres-backed idempotency keys with a Redis fast-path
+    cache — Redis is not the correctness source.
+  - **Possible tuning:** Hikari pool (default 10) may need raising to ~20–30 at these rates.
+- **2026-09-24 — Scope note: idempotency must cover checkout, not only payment.** The
+  duplicate-order race is at checkout (two concurrent requests both read the full cart before
+  either clears it). `payments.order_id UNIQUE` already blocks duplicate charges per order.
+  Segment 7 wires idempotency into both.
+- **2026-09-24 — Crash-window handling (design confirmed).** If the server crashes after Stripe
+  charges but before we save: (1) Stripe webhook `payment_intent.succeeded` tells us later,
+  (2) passing our key to Stripe's `Idempotency-Key` makes a retry return the original charge,
+  (3) stale-lock reclaim lets the retry finish. **Known Phase 1 gap:** until the webhook exists,
+  `PaymentService.pay()` has this crash window.
+- **2026-09-24 — Phase 1 COMPLETE.** `PaymentController` and `StripeWebhookController` are
+  done, all endpoints manually tested, `feature/phase-1` merged to `main` via PR #5. (Earlier
+  entries today wrongly listed these as pending — docs were stale, code was ahead.) Phase 2
+  (idempotency layer) starts at Segment 5. Stale local/remote feature branches still to be
+  deleted per `RULES.md` §6.
+- **2026-09-25 — Phase 2 started on branch `feature/phase-2`** (earlier edits were briefly made on
+  `main` by mistake; nothing was committed or pushed, moved to the branch before any commit).
+  Working mode: Claude writes code only; the user runs the app/tests/Flyway.
+- **2026-09-25 — Segment 5 core written.** `V6__create_idempotency_keys_table.sql`,
+  `IdempotencyKey` + `IdempotencyStatus`, `IdempotencyKeyRepository`, `RequestHashUtil`,
+  `IdempotencyProperties`, `ClaimResult`, `IdempotencyService`. Decisions:
+  - **The key belongs to a client request (one attempt), not to an order/payment.** Client
+    generates it (`Idempotency-Key` header); server never generates client keys. No `order_id`
+    column (option A). Payment hash covers method + path (order id) + `paymentMethodId`; the key
+    itself is never part of the hash — key = identity, hash = content, stored in the same row.
+  - **Hash built from explicit values, not raw JSON** (length-prefixed parts) — no JSON library
+    dependency (Spring Boot 4 moved to a new Jackson package) and no formatting sensitivity.
+  - **`claim` is one atomic `INSERT ... ON CONFLICT DO UPDATE ... WHERE expires_at < now`**, so an
+    expired-but-not-yet-deleted row is recycled and never blocks a new request; the cleanup job
+    (Segment 8) is housekeeping only, correctness does not depend on its timing.
+  - **`claim`/`complete`/`fail` use `REQUIRES_NEW`** so the claim commits immediately and
+    concurrent duplicates can see it even if the caller is inside a transaction.
+  - **Deterministic failures (400, declined card) are stored as `FAILED` and replayed**; crashes
+    and timeouts store nothing, the lock goes stale and the retry reclaims the key.
+  - **TTL and lock time are configurable** (`idempotency.ttl-hours: 24`, `lock-seconds: 60`).
+  - **Known limit:** after 24h a key is forgotten; long-term double-charge protection comes from
+    `payments.order_id UNIQUE` and order status, not from this table.
+  - `RequestHashUtilTest` 6/6 and `IdempotencyServiceTest` 10/10 written; service test passing
+    (10/10 confirmed by the user). Repository SQL is mocked in unit tests, so an integration
+    test (Testcontainers) is being written to prove the real atomic behaviour.
+- **2026-09-25 — Segment 5 COMPLETE.** `IdempotencyKeyRepositoryIntegrationTest` 5/5 passing:
+  8 concurrent claims of one key give exactly one winner, a live row is never overwritten, an
+  expired row is recycled, only one of 8 concurrent reclaims of a stale lock wins, a fresh lock
+  cannot be reclaimed. Unit tests: `RequestHashUtilTest` 6/6, `IdempotencyServiceTest` 10/10.
+  - **Integration test approach (Option 2, not Testcontainers):** it runs as a `@SpringBootTest`
+    against the Docker Postgres (`zapmart-postgres`, port 5433) but in a **separate database
+    `zapmart_test`**, so dev data in `ZapMart_DB` is never touched. **Standing setup step, once per
+    machine:** `docker exec -it zapmart-postgres psql -U zapmart -d ZapMart_DB -c "CREATE DATABASE zapmart_test;"`.
+    The class name ends in `Test`, so `mvn test` also runs it and needs that database; revisit
+    (Testcontainers or a separate `*IT` suffix) if CI is added.
+  - **Windows note:** in PowerShell never type `<container>` literally, use the real name
+    (`zapmart-postgres`); `<` is a reserved operator there.
+  - Added `concepts.md` at the repo root: interview-style Q&A for Segment 5, to be extended per segment.

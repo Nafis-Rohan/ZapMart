@@ -48,18 +48,20 @@ checklist items below, but expect a reminder after each relevant piece of code.
 - [x] `Payment` entity + migration
 - [x] Stripe client config (API key, webhook secret via env)
 - [x] Payment service — create PaymentIntent, confirm, handle basic success/failure
-- [ ] Payment controller + Stripe webhook endpoint
-- [ ] Manual test: single successful end-to-end charge
+- [x] Payment controller + Stripe webhook endpoint
+- [x] Manual test: single successful end-to-end charge (all endpoints tested; PR #5 merged)
 
-**→ Phase 1 complete when Segment 4 passes a manual happy-path checkout-to-charge test.**
+**→ Phase 1 COMPLETE (2026-09-24): merged to `main` via PR #5.**
 
 ---
 
 ## Segment 5 — Idempotency Schema & Core Claim Logic
-- [ ] `idempotency_keys` table + migration (per PRD schema)
-- [ ] `IdempotencyService.claim()` — atomic `INSERT ... ON CONFLICT` claim logic
-- [ ] Request hash utility (SHA-256 of normalized request body)
-- [ ] Status branching: COMPLETED / IN_PROGRESS+locked / IN_PROGRESS+stale (reclaim)
+- [x] `idempotency_keys` table + migration (`V6__create_idempotency_keys_table.sql`, `response_body` as TEXT)
+- [x] `IdempotencyService.claim()` — atomic `INSERT ... ON CONFLICT` claim logic (`IdempotencyKeyRepository.claim`, expired rows recycled in the same statement)
+- [x] Request hash utility (`RequestHashUtil`, SHA-256 of explicit request values) — unit tested, 6/6
+- [x] Status branching: COMPLETED / IN_PROGRESS+locked / IN_PROGRESS+stale (reclaim) — `IdempotencyServiceTest` 10/10 passing
+- [x] Integration test for the atomic claim / reclaim SQL — `IdempotencyKeyRepositoryIntegrationTest` 5/5 passing (real Postgres via the Docker container, separate database `zapmart_test`; Testcontainers not used)
+- [x] `concepts.md` — interview-style Q&A of every Segment 5 decision
 
 ## Segment 6 — Redis Read-Through Cache
 - [ ] Redis client config
@@ -73,7 +75,10 @@ checklist items below, but expect a reminder after each relevant piece of code.
 
 ## Segment 8 — Cleanup & Proof
 - [ ] Scheduled job sweeping expired keys
-- [ ] k6 (or equivalent) script firing concurrent duplicate requests
+- [ ] Fake Stripe stub (profile-based, ~200 ms delay) for load tests
+- [ ] k6 script firing concurrent duplicate requests (same key, `http.batch`), rate ladder
+      1,500 → 2,000 → 3,000 req/min (stretch 4,000); run 3 stages: no idempotency,
+      Postgres-only, Postgres + Redis; verify duplicates by counting orders/payments in Postgres
 - [ ] Sequence diagram of the race condition + reclaim path
 - [ ] Short ADR: why Postgres is source of truth, not Redis-only
 
