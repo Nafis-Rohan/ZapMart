@@ -13,6 +13,7 @@ import com.nafis.ZapMart.product.ProductRepository;
 import com.stripe.exception.CardException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.PaymentIntent;
+import com.stripe.net.RequestOptions;
 import com.stripe.param.PaymentIntentCreateParams;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -31,7 +32,7 @@ public class PaymentService {
     private final ProductRepository productRepository;
 
     @Transactional
-    public PaymentResponse pay(Long userId, Long orderId, PaymentRequest request) {
+    public PaymentResponse pay(Long userId, Long orderId, PaymentRequest request, String stripeIdempotencyKey) {
         Order order = orderRepository.findByIdAndUserIdWithItems(orderId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
 
@@ -43,7 +44,7 @@ public class PaymentService {
             throw new BadRequestException("A payment already exists for this order");
         }
 
-        ChargeResult result = createAndConfirmIntent(order, request.paymentMethodId());
+        ChargeResult result = createAndConfirmIntent(order, request.paymentMethodId(), stripeIdempotencyKey);
         PaymentStatus status = "succeeded".equals(result.status()) ? PaymentStatus.SUCCEEDED : PaymentStatus.FAILED;
 
         Payment payment = new Payment();
@@ -68,7 +69,7 @@ public class PaymentService {
 
     private record ChargeResult(String status, String stripePaymentIntentId) {}
 
-    private ChargeResult createAndConfirmIntent(Order order, String paymentMethodId) {
+    private ChargeResult createAndConfirmIntent(Order order, String paymentMethodId, String stripeIdempotencyKey) {
         try {
             PaymentIntentCreateParams params = PaymentIntentCreateParams.builder()
                     .setAmount(order.getTotalPrice().multiply(BigDecimal.valueOf(100)).longValueExact())
@@ -77,7 +78,12 @@ public class PaymentService {
                     .addPaymentMethodType("card")
                     .setConfirm(true)
                     .build();
-            PaymentIntent intent = PaymentIntent.create(params);
+            // Stripe remembers this key for 24h: if we crashed after Stripe charged but before we saved,
+            // a retry with the same key returns the ORIGINAL PaymentIntent instead of charging twice.
+            RequestOptions options = RequestOptions.builder()
+                    .setIdempotencyKey(stripeIdempotencyKey)
+                    .build();
+            PaymentIntent intent = PaymentIntent.create(params, options);
             return new ChargeResult(intent.getStatus(), intent.getId());
         } catch (CardException e) {
             // Stripe throws (rather than returning a "failed" PaymentIntent) on a hard decline.

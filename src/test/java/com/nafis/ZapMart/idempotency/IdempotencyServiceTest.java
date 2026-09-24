@@ -1,12 +1,16 @@
 package com.nafis.ZapMart.idempotency;
 
+import com.nafis.ZapMart.idempotency.cache.CachedResponse;
+import com.nafis.ZapMart.idempotency.cache.IdempotencyCacheService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -14,11 +18,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -31,11 +38,17 @@ class IdempotencyServiceTest {
     @Mock
     private IdempotencyKeyRepository repository;
 
+    @Mock
+    private IdempotencyCacheService cache;
+
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
     private IdempotencyService service;
 
     @BeforeEach
     void setUp() {
-        service = new IdempotencyService(repository, new IdempotencyProperties());
+        service = new IdempotencyService(repository, new IdempotencyProperties(), cache, transactionManager);
     }
 
     private IdempotencyKey row(Long id, String hash, IdempotencyStatus status, Instant lockedUntil) {
@@ -46,6 +59,7 @@ class IdempotencyServiceTest {
         row.setRequestHash(hash);
         row.setStatus(status);
         row.setLockedUntil(lockedUntil);
+        row.setExpiresAt(Instant.now().plus(Duration.ofHours(1)));
         return row;
     }
 
@@ -53,6 +67,8 @@ class IdempotencyServiceTest {
         when(repository.claim(eq(USER_ID), eq(KEY), eq(HASH), any(Instant.class), any(Instant.class), any(Instant.class)))
                 .thenReturn(result);
     }
+
+    // ---------- Postgres path ----------
 
     @Test
     void newKeyIsClaimedAndProceeds() {
@@ -160,12 +176,15 @@ class IdempotencyServiceTest {
                 any(Instant.class), any(Instant.class), any(Instant.class));
     }
 
+    // ---------- complete / fail ----------
+
     @Test
     void completeStoresResponseAndClearsLock() {
         IdempotencyKey running = row(5L, HASH, IdempotencyStatus.IN_PROGRESS, Instant.now().plusSeconds(60));
         when(repository.findById(5L)).thenReturn(Optional.of(running));
+        when(repository.save(any(IdempotencyKey.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.complete(5L, 201, "{\"orderId\":42}");
+        service.complete(USER_ID, 5L, 201, "{\"orderId\":42}");
 
         ArgumentCaptor<IdempotencyKey> saved = ArgumentCaptor.forClass(IdempotencyKey.class);
         verify(repository).save(saved.capture());
@@ -179,13 +198,92 @@ class IdempotencyServiceTest {
     void failStoresFailureResponseAndClearsLock() {
         IdempotencyKey running = row(5L, HASH, IdempotencyStatus.IN_PROGRESS, Instant.now().plusSeconds(60));
         when(repository.findById(5L)).thenReturn(Optional.of(running));
+        when(repository.save(any(IdempotencyKey.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.fail(5L, 400, "{\"error\":\"Cart is empty\"}");
+        service.fail(USER_ID, 5L, 400, "{\"error\":\"Cart is empty\"}");
 
         ArgumentCaptor<IdempotencyKey> saved = ArgumentCaptor.forClass(IdempotencyKey.class);
         verify(repository).save(saved.capture());
         assertEquals(IdempotencyStatus.FAILED, saved.getValue().getStatus());
         assertEquals(400, saved.getValue().getResponseStatus());
         assertNull(saved.getValue().getLockedUntil());
+    }
+
+    // ---------- Redis cache wiring ----------
+
+    @Test
+    void cacheHitWithSameHashReplaysWithoutTouchingPostgres() {
+        when(cache.get(USER_ID, KEY))
+                .thenReturn(Optional.of(new CachedResponse(HASH, IdempotencyStatus.COMPLETED, 201, "{\"orderId\":42}")));
+
+        ClaimResult result = service.claim(USER_ID, KEY, HASH);
+
+        assertEquals(ClaimResult.Outcome.REPLAY, result.outcome());
+        assertEquals(201, result.responseStatus());
+        assertEquals("{\"orderId\":42}", result.responseBody());
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    void cacheHitWithDifferentHashIsMismatchWithoutTouchingPostgres() {
+        when(cache.get(USER_ID, KEY))
+                .thenReturn(Optional.of(new CachedResponse("hash-other", IdempotencyStatus.COMPLETED, 201, "{}")));
+
+        ClaimResult result = service.claim(USER_ID, KEY, HASH);
+
+        assertEquals(ClaimResult.Outcome.MISMATCH, result.outcome());
+        verifyNoInteractions(repository);
+    }
+
+    @Test
+    void completeWritesFinishedResponseToCacheAfterPostgres() {
+        IdempotencyKey running = row(5L, HASH, IdempotencyStatus.IN_PROGRESS, Instant.now().plusSeconds(60));
+        when(repository.findById(5L)).thenReturn(Optional.of(running));
+        when(repository.save(any(IdempotencyKey.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.complete(USER_ID, 5L, 201, "{\"orderId\":42}");
+
+        ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
+        verify(cache).put(eq(USER_ID), eq(KEY), eq(HASH), eq(IdempotencyStatus.COMPLETED),
+                eq(201), eq("{\"orderId\":42}"), ttl.capture());
+        assertTrue(ttl.getValue().toMinutes() > 0);
+    }
+
+    @Test
+    void failWritesFailureToCache() {
+        IdempotencyKey running = row(5L, HASH, IdempotencyStatus.IN_PROGRESS, Instant.now().plusSeconds(60));
+        when(repository.findById(5L)).thenReturn(Optional.of(running));
+        when(repository.save(any(IdempotencyKey.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.fail(USER_ID, 5L, 400, "{\"error\":\"Cart is empty\"}");
+
+        verify(cache).put(eq(USER_ID), eq(KEY), eq(HASH), eq(IdempotencyStatus.FAILED),
+                eq(400), eq("{\"error\":\"Cart is empty\"}"), any(Duration.class));
+    }
+
+    @Test
+    void finishedRowFoundInPostgresIsPutBackIntoCache() {
+        stubClaim(0);
+        IdempotencyKey completed = row(5L, HASH, IdempotencyStatus.COMPLETED, null);
+        completed.setResponseStatus(201);
+        completed.setResponseBody("{\"orderId\":42}");
+        when(repository.findByUserIdAndIdempotencyKey(USER_ID, KEY)).thenReturn(Optional.of(completed));
+
+        service.claim(USER_ID, KEY, HASH);
+
+        verify(cache).put(eq(USER_ID), eq(KEY), eq(HASH), eq(IdempotencyStatus.COMPLETED),
+                eq(201), eq("{\"orderId\":42}"), any(Duration.class));
+    }
+
+    @Test
+    void inProgressRowIsNeverWrittenToCache() {
+        stubClaim(0);
+        when(repository.findByUserIdAndIdempotencyKey(USER_ID, KEY))
+                .thenReturn(Optional.of(row(5L, HASH, IdempotencyStatus.IN_PROGRESS, Instant.now().plusSeconds(30))));
+
+        service.claim(USER_ID, KEY, HASH);
+
+        verify(cache, never()).put(anyLong(), anyString(), anyString(), any(IdempotencyStatus.class),
+                anyInt(), any(), any(Duration.class));
     }
 }
