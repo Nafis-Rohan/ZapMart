@@ -64,14 +64,20 @@ checklist items below, but expect a reminder after each relevant piece of code.
 - [x] `concepts.md` — interview-style Q&A of every Segment 5 decision
 
 ## Segment 6 — Redis Read-Through Cache
-- [ ] Redis client config
-- [ ] Cache-first lookup before hitting Postgres claim logic
-- [ ] Write-through on completed response, TTL matched to `expires_at`
+- [x] Redis client config — Spring Boot's auto-configured `StringRedisTemplate` (host/port in `application.yml`), no custom config class needed
+- [x] Cache-first lookup before hitting Postgres claim logic (`IdempotencyCacheService` in `idempotency/cache/`, wired into `IdempotencyService.claim()`)
+- [x] Write-through on completed response, TTL matched to `expires_at` (Postgres commit first, then Redis)
+- [x] Unit tests: `IdempotencyCacheServiceTest` (9), `IdempotencyServiceTest` (16, includes cache cases)
+- [ ] *(Skipped for now, tracked)* Integration test with a real Redis (round trip + "Redis down" fallback)
 
 ## Segment 7 — Wiring Into Checkout/Payment Flow
-- [ ] Interceptor/filter or service-level wrapper applying idempotency to checkout endpoint
-- [ ] Conflict response shape (`409` + `Retry-After`, `422` on hash mismatch)
-- [ ] Pass idempotency key through to Stripe's own `Idempotency-Key`
+- [x] Service-level wrapper applying idempotency to checkout AND payment (`IdempotentExecutor`; header `Idempotency-Key` required)
+- [x] Conflict response shape (`409` + `Retry-After`, `422` on hash mismatch, `400` on missing key)
+- [x] Pass idempotency key through to Stripe's own `Idempotency-Key` (`pay-{userId}-{clientKey}`)
+- [x] Unit tests: `IdempotentExecutorTest` (12), `PaymentServiceTest` updated (6)
+- [x] `segment7.md` — organized summary of what changed and why
+- [ ] Manual Postman check of retry / replay / 409 / 422 / 400 (see `segment7.md` §8)
+- [ ] *(Skipped for now, tracked)* automated end-to-end test of the two endpoints
 
 ## Segment 8 — Cleanup & Proof
 - [ ] Scheduled job sweeping expired keys

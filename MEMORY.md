@@ -248,3 +248,42 @@ just add new dated entries below.
   - **Windows note:** in PowerShell never type `<container>` literally, use the real name
     (`zapmart-postgres`); `<` is a reserved operator there.
   - Added `concepts.md` at the repo root: interview-style Q&A for Segment 5, to be extended per segment.
+- **2026-09-25 — Segment 6 (Redis read-through cache) written.** `CachedResponse` +
+  `IdempotencyCacheService` in `idempotency/cache/`, wired into `IdempotencyService`.
+  - **Redis stores only FINISHED responses** (`COMPLETED`/`FAILED`), never `IN_PROGRESS`. One Redis
+    hash per key (`idem:{userId}:{key}`) with fields requestHash/status/responseStatus/body, plain
+    strings (no JSON library). The hash is kept so a cache hit can still return `422` on mismatch.
+  - **Redis TTL = remaining lifetime of the Postgres row** (`expires_at`).
+  - **Redis never affects correctness:** every cache method catches Redis errors, logs a warning
+    and falls back to Postgres; a failed or partial write evicts the key so nothing lives without
+    an expiry; a corrupt entry is treated as a miss and evicted.
+  - **Order of operations:** cache check, then Postgres claim. Finished responses are written to
+    Redis only AFTER the Postgres transaction commits. A finished row found in Postgres but not in
+    Redis is put back (self-heal).
+  - **`IdempotencyService` now uses a `TransactionTemplate` (REQUIRES_NEW) instead of
+    `@Transactional`**, so a cache hit never opens a DB transaction and Redis is never written
+    before Postgres commits. `complete`/`fail` now take a `userId` (needed for the cache key).
+  - **SHORTCUT (flagged, tracked in TASK.md): no integration test against a real Redis.** The cache
+    is covered by unit tests with mocks only, so real Redis behaviour (serialization, TTL, outage
+    fallback) is unproven until the Segment 8 k6 run or a later Redis integration test.
+- **2026-09-25 — Segment 7 (wiring into checkout/payment) written.** Full write-up in `segment7.md`.
+  - `IdempotentExecutor` (`idempotency/`) wraps a controller action: validate key, claim, run,
+    store (`complete`/`fail`), replay, `409`+`Retry-After`, `422`. Chosen over a filter/interceptor
+    because it works on the finished result and business exceptions and is easy to unit test.
+  - **`Idempotency-Key` header is REQUIRED** on `POST /api/orders/checkout` and
+    `POST /api/orders/{orderId}/payments` (`400` if missing/blank/over 255 chars). Existing
+    Postman calls for these two endpoints need the header from now on.
+  - Controllers now return `ResponseEntity<String>` so the first response and replays are
+    byte-identical. Replays add header `Idempotent-Replayed: true`.
+  - Only known business errors (BadRequest/NotFound/Forbidden) are stored as `FAILED` and
+    replayed; unexpected errors store nothing (lock goes stale, retry reclaims).
+  - **Stripe passthrough:** `PaymentService.pay(..., stripeIdempotencyKey)` sends the key via
+    `RequestOptions`; key is `"pay-" + userId + "-" + clientKey`. Closes the "Stripe charged but we
+    crashed" gap together with stale-lock reclaim and the webhook.
+  - Tests: `IdempotentExecutorTest` 12, `PaymentServiceTest` 6 (new: key reaches Stripe).
+  - **SHORTCUTS (flagged):** no automated end-to-end test of the two endpoints (manual Postman
+    check instead) and no real-Redis integration test. Executor repeats the status mapping of
+    `GlobalExceptionHandler` for stored failures (commented). Checkout hash has no body, so a key
+    reused for a different cart is treated as a retry.
+  - `concepts.md` now has Segment 6 and Segment 7 sections. Note: `.gitignore` ignores
+    `concepts.md`; `segment7.md` is NOT ignored (decide if it should be committed).
