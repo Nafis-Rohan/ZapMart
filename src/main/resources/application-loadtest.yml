@@ -1,0 +1,18 @@
+# Used only when the app starts with the "loadtest" profile (see segment 8 / k6).
+spring:
+  datasource:
+    # Separate database so load tests never fill the dev database with test orders.
+    url: jdbc:postgresql://localhost:5433/zapmart_test
+    hikari:
+      # More connections than the default 10: payments hold one while waiting for the fake Stripe.
+      maximum-pool-size: 30
+
+stripe:
+  # The Stripe library talks to the fake Stripe endpoint inside this app instead of api.stripe.com.
+  api-base: http://localhost:9090/fake-stripe
+  # Dummy values: nothing real is ever charged in this mode.
+  secret-key: sk_test_fake
+  webhook-secret: whsec_fake
+
+fakestripe:
+  delay-ms: 200

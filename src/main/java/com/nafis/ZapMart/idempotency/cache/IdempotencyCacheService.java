@@ -1,5 +1,6 @@
 package com.nafis.ZapMart.idempotency.cache;
 
+import com.nafis.ZapMart.idempotency.IdempotencyProperties;
 import com.nafis.ZapMart.idempotency.IdempotencyStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,8 +28,12 @@ public class IdempotencyCacheService {
     private static final String F_BODY = "body";
 
     private final StringRedisTemplate redis;
+    private final IdempotencyProperties properties;
 
     public Optional<CachedResponse> get(Long userId, String key) {
+        if (!properties.isCacheEnabled()) {
+            return Optional.empty();
+        }
         String redisKey = redisKey(userId, key);
         try {
             Map<Object, Object> entries = redis.opsForHash().entries(redisKey);
@@ -50,7 +55,7 @@ public class IdempotencyCacheService {
     /** Stores a finished response. ttl should match the Postgres row's remaining lifetime. */
     public void put(Long userId, String key, String requestHash, IdempotencyStatus status,
                     int responseStatus, String responseBody, Duration ttl) {
-        if (ttl == null || ttl.isZero() || ttl.isNegative()) {
+        if (!properties.isCacheEnabled() || ttl == null || ttl.isZero() || ttl.isNegative()) {
             return;
         }
         String redisKey = redisKey(userId, key);

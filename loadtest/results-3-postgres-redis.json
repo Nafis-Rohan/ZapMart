@@ -1,0 +1,12 @@
+{
+  "stage": "2-postgres-only",
+  "ratePerMinute": 300,
+  "duration": "1m",
+  "duplicates": 3,
+  "iterations": 300,
+  "ordersCreated": 300,
+  "duplicateOrders": 0,
+  "paymentsCreated": 300,
+  "duplicatePayments": 0,
+  "fakeStripeChargeRequests": 300
+}

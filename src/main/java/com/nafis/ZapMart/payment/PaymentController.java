@@ -1,5 +1,6 @@
 package com.nafis.ZapMart.payment;
 
+import com.nafis.ZapMart.idempotency.IdempotencyProperties;
 import com.nafis.ZapMart.idempotency.IdempotentExecutor;
 import com.nafis.ZapMart.idempotency.RequestHashUtil;
 import com.nafis.ZapMart.payment.dto.PaymentRequest;
@@ -9,6 +10,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/orders/{orderId}/payments")
 @RequiredArgsConstructor
@@ -16,6 +19,7 @@ public class PaymentController {
 
     private final PaymentService paymentService;
     private final IdempotentExecutor idempotentExecutor;
+    private final IdempotencyProperties idempotencyProperties;
 
     @PostMapping
     public ResponseEntity<String> pay(
@@ -33,6 +37,10 @@ public class PaymentController {
     // Scoped by user so two users sending the same client key can never collide at Stripe, and
     // prefixed so it can never equal a key used for another kind of action.
     private String stripeKey(Long userId, String idempotencyKey) {
+        if (!idempotencyProperties.isEnabled()) {
+            // Load-test "before" stage only: behave like Phase 1, where every call to Stripe was a new charge.
+            return UUID.randomUUID().toString();
+        }
         return "pay-" + userId + "-" + idempotencyKey;
     }
 }
