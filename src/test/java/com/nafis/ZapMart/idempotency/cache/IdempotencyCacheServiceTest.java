@@ -1,5 +1,6 @@
 package com.nafis.ZapMart.idempotency.cache;
 
+import com.nafis.ZapMart.idempotency.IdempotencyProperties;
 import com.nafis.ZapMart.idempotency.IdempotencyStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,7 +46,7 @@ class IdempotencyCacheServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(redis.opsForHash()).thenReturn(hashOps);
-        service = new IdempotencyCacheService(redis);
+        service = new IdempotencyCacheService(redis, new IdempotencyProperties());
     }
 
     private Map<Object, Object> entry(String status) {
@@ -142,6 +143,30 @@ class IdempotencyCacheServiceTest {
                 service.put(USER_ID, KEY, "hash-a", IdempotencyStatus.COMPLETED, 201, "{}", Duration.ofHours(1)));
 
         verify(redis).delete(REDIS_KEY);
+    }
+
+    @Test
+    void whenCacheDisabledGetReturnsEmptyWithoutTouchingRedis() {
+        IdempotencyProperties off = new IdempotencyProperties();
+        off.setCacheEnabled(false);
+        IdempotencyCacheService disabled = new IdempotencyCacheService(redis, off);
+
+        Optional<CachedResponse> result = disabled.get(USER_ID, KEY);
+
+        assertTrue(result.isEmpty());
+        verify(hashOps, never()).entries(anyString());
+    }
+
+    @Test
+    void whenCacheDisabledPutWritesNothing() {
+        IdempotencyProperties off = new IdempotencyProperties();
+        off.setCacheEnabled(false);
+        IdempotencyCacheService disabled = new IdempotencyCacheService(redis, off);
+
+        disabled.put(USER_ID, KEY, "hash-a", IdempotencyStatus.COMPLETED, 201, "{}", Duration.ofHours(1));
+
+        verify(hashOps, never()).putAll(anyString(), anyMap());
+        verify(redis, never()).expire(anyString(), any(Duration.class));
     }
 
     @Test

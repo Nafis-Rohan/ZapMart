@@ -55,9 +55,14 @@ public class IdempotentExecutor {
 
     private final IdempotencyService idempotencyService;
     private final JsonMapper jsonMapper;
+    private final IdempotencyProperties properties;
 
     public ResponseEntity<String> execute(Long userId, String key, String requestHash,
                                           HttpStatus successStatus, Supplier<Object> action) {
+        if (!properties.isEnabled()) {
+            return runWithoutIdempotency(successStatus, action);
+        }
+
         validateKey(key);
 
         ClaimResult claim = idempotencyService.claim(userId, key, requestHash);
@@ -95,6 +100,16 @@ public class IdempotentExecutor {
             String body = errorBody(e.getMessage());
             idempotencyService.fail(userId, keyId, status, body);
             return json(status).body(body);
+        }
+    }
+
+    // Load-test "before" stage only (idempotency.enabled=false): behave like the old unprotected endpoint,
+    // no key needed, nothing claimed or stored, business errors answered exactly as before.
+    private ResponseEntity<String> runWithoutIdempotency(HttpStatus successStatus, Supplier<Object> action) {
+        try {
+            return json(successStatus.value()).body(jsonMapper.writeValueAsString(action.get()));
+        } catch (BadRequestException | ResourceNotFoundException | ForbiddenException e) {
+            return json(failureStatus(e)).body(errorBody(e.getMessage()));
         }
     }
 

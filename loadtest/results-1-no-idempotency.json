@@ -1,0 +1,12 @@
+{
+  "stage": "1-no-idempotency",
+  "ratePerMinute": 300,
+  "duration": "1m",
+  "duplicates": 3,
+  "iterations": 301,
+  "ordersCreated": 301,
+  "duplicateOrders": 0,
+  "paymentsCreated": 301,
+  "duplicatePayments": 0,
+  "fakeStripeChargeRequests": 903
+}

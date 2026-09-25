@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -11,6 +12,20 @@ import java.util.Optional;
 public interface IdempotencyKeyRepository extends JpaRepository<IdempotencyKey, Long> {
 
     Optional<IdempotencyKey> findByUserIdAndIdempotencyKey(Long userId, String idempotencyKey);
+
+    /**
+     * Deletes up to batchSize expired rows and returns how many were deleted. Batched so a big backlog
+     * never holds one long transaction or lock; the cleanup job repeats until a batch comes back short.
+     */
+    @Transactional
+    @Modifying
+    @Query(value = """
+            DELETE FROM idempotency_keys
+             WHERE id IN (SELECT id FROM idempotency_keys
+                           WHERE expires_at < :now
+                           LIMIT :batchSize)
+            """, nativeQuery = true)
+    int deleteExpiredBatch(@Param("now") Instant now, @Param("batchSize") int batchSize);
 
     /**
      * Atomic claim. Returns 1 if this request now owns the key, 0 if a live row already exists.

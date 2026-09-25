@@ -39,11 +39,14 @@ class IdempotentExecutorTest {
     @Mock
     private IdempotencyService idempotencyService;
 
+    private IdempotencyProperties properties;
+
     private IdempotentExecutor executor;
 
     @BeforeEach
     void setUp() {
-        executor = new IdempotentExecutor(idempotencyService, JsonMapper.builder().build());
+        properties = new IdempotencyProperties();
+        executor = new IdempotentExecutor(idempotencyService, JsonMapper.builder().build(), properties);
     }
 
     // ---------- new key ----------
@@ -152,6 +155,43 @@ class IdempotentExecutorTest {
                 () -> executor.execute(USER_ID, tooLong, HASH, HttpStatus.CREATED, () -> Map.of()));
 
         verifyNoInteractions(idempotencyService);
+    }
+
+    // ---------- layer switched off (load-test "before" stage) ----------
+
+    @Test
+    void whenDisabledActionRunsWithoutAnyKeyAndNothingIsClaimedOrStored() {
+        properties.setEnabled(false);
+
+        ResponseEntity<String> response = executor.execute(USER_ID, null, HASH, HttpStatus.CREATED,
+                () -> Map.of("orderId", 42));
+
+        assertEquals(201, response.getStatusCode().value());
+        assertEquals("{\"orderId\":42}", response.getBody());
+        verifyNoInteractions(idempotencyService);
+    }
+
+    @Test
+    void whenDisabledBusinessErrorsAreAnsweredAsBeforeButNotStored() {
+        properties.setEnabled(false);
+
+        ResponseEntity<String> response = executor.execute(USER_ID, KEY, HASH, HttpStatus.CREATED, () -> {
+            throw new BadRequestException("Cart is empty");
+        });
+
+        assertEquals(400, response.getStatusCode().value());
+        assertEquals("{\"error\":\"Cart is empty\"}", response.getBody());
+        verifyNoInteractions(idempotencyService);
+    }
+
+    @Test
+    void whenDisabledUnexpectedErrorsStillPropagate() {
+        properties.setEnabled(false);
+
+        assertThrows(IllegalStateException.class, () ->
+                executor.execute(USER_ID, KEY, HASH, HttpStatus.CREATED, () -> {
+                    throw new IllegalStateException("boom");
+                }));
     }
 
     // ---------- failures ----------

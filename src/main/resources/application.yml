@@ -24,7 +24,7 @@ spring:
   data:
     redis:
       host: localhost
-      port: 6379
+      port: 6380
 
 server:
   port: 9090
@@ -34,5 +34,10 @@ stripe:
   webhook-secret: ${STRIPE_WEBHOOK_SECRET}
 
 idempotency:
+  enabled: true
+  cache-enabled: true
   ttl-hours: 24
   lock-seconds: 60
+  cleanup-batch-size: 1000
+  cleanup-interval-ms: 3600000
+  cleanup-initial-delay-ms: 60000
